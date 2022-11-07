@@ -18,7 +18,12 @@ class TwoCropsTransform:
         is_edge_k = torch.ones((1,), dtype=torch.int)
         q = t[0](q)
         k = t[1](k)
-        return q.unsqueeze(0), k.unsqueeze(0), is_edge_q.unsqueeze(0), is_edge_k.unsqueeze(0)
+        return (
+            q.unsqueeze(0),
+            k.unsqueeze(0),
+            is_edge_q.unsqueeze(0),
+            is_edge_k.unsqueeze(0),
+        )
 
     def __call__(self, x):
         q, k, is_edge_q, is_edge_k = self.trans(self.base_transform, x, x)
@@ -48,16 +53,26 @@ class TwoCropsTransformPlusCanny:
         q = t[0](q)
         k = t[1](k)
         if isedge:
-            assert (isinstance(t, tuple) and len(t) == 3)
+            assert isinstance(t, tuple) and len(t) == 3
             c = t[2](q)
         else:
             c = q
-        return q.unsqueeze(0), k.unsqueeze(0), is_edge_q.unsqueeze(0), ixTk.unsqueeze(0), c.unsqueeze(0)
+        return (
+            q.unsqueeze(0),
+            k.unsqueeze(0),
+            is_edge_q.unsqueeze(0),
+            ixTk.unsqueeze(0),
+            c.unsqueeze(0),
+        )
 
     def __call__(self, x):
         q, k, ixTq, ixTk, _ = self.trans(self.base_transform, x, x, False)
-        q2, k2, ixTq2, ixTk2, c = self.trans((self.base_transform[1], self.base_transform[0], self.base_transform[2]),
-                                             x, x, True)
+        q2, k2, ixTq2, ixTk2, c = self.trans(
+            (self.base_transform[1], self.base_transform[0], self.base_transform[2]),
+            x,
+            x,
+            True,
+        )
         ixTq2[:] = 1
         ixTk2[:] = 0
         q = torch.cat([q, q2], dim=0)
@@ -71,7 +86,7 @@ class TwoCropsTransformPlusCanny:
 class GaussianBlur(object):
     """Gaussian blur augmentation in SimCLR https://arxiv.org/abs/2002.05709"""
 
-    def __init__(self, sigma=(.1, 2.)):
+    def __init__(self, sigma=(0.1, 2.0)):
         self.sigma = sigma
 
     def __call__(self, x):
@@ -87,15 +102,15 @@ class StretchValues(torch.nn.Module):
     @staticmethod
     def forward(img):
         img -= torch.min(img)
-        img /= (torch.max(img)+1e-14)
+        img /= torch.max(img) + 1e-14
         return img
 
 
 class ToEdges2D(torch.nn.Module):
-    def __init__(self, sigma='1.0', dil='0'):
+    def __init__(self, sigma="1.0", dil="0"):
         super().__init__()
-        self.sigma = [float(x) for x in sigma.split(',')]
-        self.dil = [int(x) for x in dil.split(',')]
+        self.sigma = [float(x) for x in sigma.split(",")]
+        self.dil = [int(x) for x in dil.split(",")]
 
     def forward(self, img):
         img = torch.mean(img, dim=0).numpy()
@@ -108,10 +123,10 @@ class ToEdges2D(torch.nn.Module):
 
 
 class ToEdges(torch.nn.Module):
-    def __init__(self, sigma='1.0', dil='0'):
+    def __init__(self, sigma="1.0", dil="0"):
         super().__init__()
-        self.sigma = [float(x) for x in sigma.split(',')]
-        self.dil = [int(x) for x in dil.split(',')]
+        self.sigma = [float(x) for x in sigma.split(",")]
+        self.dil = [int(x) for x in dil.split(",")]
 
     def forward(self, img):
         img = torch.mean(img, dim=0).numpy()
@@ -124,4 +139,4 @@ class ToEdges(torch.nn.Module):
         return img_out
 
     def __repr__(self):
-        return self.__class__.__name__ + '(sigma={})'.format(self.sigma)
+        return self.__class__.__name__ + "(sigma={})".format(self.sigma)

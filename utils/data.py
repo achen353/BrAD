@@ -28,7 +28,9 @@ class DataCoLoaderIterator(object):
                 if x is None:
                     # shuffle for DDP
                     try:
-                        self.data_loaders[iR].sampler.set_epoch(np.random.randint(100000))
+                        self.data_loaders[iR].sampler.set_epoch(
+                            np.random.randint(100000)
+                        )
                     except:
                         pass
                     self.data_loaders_iters[iR] = iter(self.data_loaders[iR])
@@ -73,7 +75,7 @@ class IndexedDataset(torch.utils.data.Dataset):
         return len(self.data)
 
     def get_index(self, index_):
-        if hasattr(self, 'index_map'):
+        if hasattr(self, "index_map"):
             index_ = self.index_map[index_]
         return index_
 

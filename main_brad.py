@@ -35,63 +35,80 @@ def main(args=None):
         random.seed(args.seed)
         torch.manual_seed(args.seed)
         cudnn.deterministic = True
-        warnings.warn('You have chosen to seed training. '
-                      'This will turn on the CUDNN deterministic setting, '
-                      'which can slow down your training considerably! '
-                      'You may see unexpected behavior when restarting '
-                      'from checkpoints.')
+        warnings.warn(
+            "You have chosen to seed training. "
+            "This will turn on the CUDNN deterministic setting, "
+            "which can slow down your training considerably! "
+            "You may see unexpected behavior when restarting "
+            "from checkpoints."
+        )
 
     if args.gpu is not None:
         if not args.debug:
-            warnings.warn('You have chosen a specific GPU. This will completely '
-                          'disable data parallelism.')
+            warnings.warn(
+                "You have chosen a specific GPU. This will completely "
+                "disable data parallelism."
+            )
     init_ddp(args.local_rank)
 
     main_worker(args.local_rank, args)
 
 
 def init_ddp(local_rank):
-    if 'RANK' not in os.environ.keys():
-        os.environ['RANK'] = '0'
-    if 'LOCAL_RANK' not in os.environ.keys():
-        os.environ['LOCAL_RANK'] = str(local_rank)
-    if 'WORLD_SIZE' not in os.environ.keys():
-        os.environ['WORLD_SIZE'] = '1'
-    if 'MASTER_PORT' not in os.environ.keys():
-        os.environ['MASTER_PORT'] = '55555'
-    if 'MASTER_ADDR' not in os.environ.keys():
-        os.environ['MASTER_ADDR'] = 'localhost'
+    if "RANK" not in os.environ.keys():
+        os.environ["RANK"] = "0"
+    if "LOCAL_RANK" not in os.environ.keys():
+        os.environ["LOCAL_RANK"] = str(local_rank)
+    if "WORLD_SIZE" not in os.environ.keys():
+        os.environ["WORLD_SIZE"] = "1"
+    if "MASTER_PORT" not in os.environ.keys():
+        os.environ["MASTER_PORT"] = "55555"
+    if "MASTER_ADDR" not in os.environ.keys():
+        os.environ["MASTER_ADDR"] = "localhost"
 
-    torch.distributed.init_process_group('nccl')
+    torch.distributed.init_process_group("nccl")
 
 
 def main_worker(gpu, args):
     args.gpu = gpu
     args = setup(args)  # TODO: Go over setup
 
-    #if args.is_root and args.debug:
+    # if args.is_root and args.debug:
     #    set_remote_debugger(debug_port=12345)
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
     # create model
     print("=> creating model '{}'".format(args.arch))
     import moco.builder
+
     model = moco.builder.MoCo(
         models_wrappers.__dict__[args.arch],
-        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp,
-        debug=args.debug,
-        args=args
+        args.moco_dim,
+        args.moco_k,
+        args.moco_m,
+        args.moco_t,
+        args.mlp,
+        # debug=args.debug,
+        args=args,
     )
 
-    if args.edges_type == 'hed':
+    if args.edges_type == "hed":
         enet = []
-        for _ in args.data.split(','):
-            enet.append(moco.builder.HedNet(args, pretrained_hed='canny' not in args.hed_loss_type))
+        for _ in args.data.split(","):
+            enet.append(
+                moco.builder.HedNet(
+                    args, pretrained_hed="canny" not in args.hed_loss_type
+                )
+            )
         if args.train_hed:
-                if  args.hed_loss_type == 'l2_hed':
-                    enet_orig = moco.builder.HedNet(args, train_hed=False, pretrained_hed=True)
-                elif 'canny' in args.hed_loss_type:
-                    enet_orig = moco.loader.ToEdges(sigma=args.edges_sigma, dil=args.edges_dil)
+            if args.hed_loss_type == "l2_hed":
+                enet_orig = moco.builder.HedNet(
+                    args, train_hed=False, pretrained_hed=True
+                )
+            elif "canny" in args.hed_loss_type:
+                enet_orig = moco.loader.ToEdges(
+                    sigma=args.edges_sigma, dil=args.edges_dil
+                )
         else:
             enet_orig = None
     else:
@@ -100,7 +117,7 @@ def main_worker(gpu, args):
 
     ddisc = moco.builder.DomainDiscriminator(args) if args.ddisc else None
 
-    print(f'=> original args.batch_size={args.batch_size}')
+    print(f"=> original args.batch_size={args.batch_size}")
 
     # For multiprocessing distributed, DistributedDataParallel constructor
     # should always set the single device scope, otherwise,
@@ -111,37 +128,62 @@ def main_worker(gpu, args):
     # DistributedDataParallel, we need to divide the batch size
     # ourselves based on the total number of GPUs we have
     args.batch_size = int(args.batch_size / dist.get_world_size())
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu)
+    model = torch.nn.parallel.DistributedDataParallel(
+        model, device_ids=[args.gpu], output_device=args.gpu
+    )
     if args.ddisc:
         ddisc.cuda(args.gpu)
-        ddisc = torch.nn.parallel.DistributedDataParallel(ddisc, device_ids=[args.gpu], output_device=args.gpu)
+        ddisc = torch.nn.parallel.DistributedDataParallel(
+            ddisc, device_ids=[args.gpu], output_device=args.gpu
+        )
 
-    if args.edges_type == 'hed':
+    if args.edges_type == "hed":
         for ei, e in enumerate(enet):
             e.cuda(args.gpu)
-            enet[ei] = torch.nn.parallel.DistributedDataParallel(e, device_ids=[args.gpu])
+            enet[ei] = torch.nn.parallel.DistributedDataParallel(
+                e, device_ids=[args.gpu]
+            )
         if args.train_hed:
             enet_orig.cuda(args.gpu)
 
-    print(f'=> modified args.batch_size={args.batch_size}')
+    print(f"=> modified args.batch_size={args.batch_size}")
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        args.lr,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay,
+    )
 
-    optimizer_ddisc = torch.optim.SGD(ddisc.parameters(), args.lr, momentum=args.momentum,
-                                      weight_decay=args.weight_decay) if args.ddisc else None
+    optimizer_ddisc = (
+        torch.optim.SGD(
+            ddisc.parameters(),
+            args.lr,
+            momentum=args.momentum,
+            weight_decay=args.weight_decay,
+        )
+        if args.ddisc
+        else None
+    )
 
-    if args.train_hed:  # in the future we may want a separate set of hyper-parameters for enet
+    if (
+        args.train_hed
+    ):  # in the future we may want a separate set of hyper-parameters for enet
         l1_criterion = nn.L1Loss().cuda(args.gpu)
         l2_criterion = nn.MSELoss().cuda(args.gpu)
         optimizer_enet = []
         for e in enet:
-            optimizer_enet.append(torch.optim.SGD(e.parameters(), args.lr, momentum=args.momentum,
-                                                  weight_decay=args.weight_decay))
+            optimizer_enet.append(
+                torch.optim.SGD(
+                    e.parameters(),
+                    args.lr,
+                    momentum=args.momentum,
+                    weight_decay=args.weight_decay,
+                )
+            )
     else:
         optimizer_enet = None
         l1_criterion = None
@@ -149,124 +191,154 @@ def main_worker(gpu, args):
     # optionally resume from a checkpoint
     if args.resume:
         if not os.path.isfile(args.resume):
-            if args.resume != 'not a path':
+            if args.resume != "not a path":
                 print("=> no checkpoint found at '{}'".format(args.resume))
-            if os.path.isfile(os.path.join(args.work_folder, 'checkpoint_last.pth.tar')):
-                args.resume = os.path.join(args.work_folder, 'checkpoint_last.pth.tar')
+            if os.path.isfile(
+                os.path.join(args.work_folder, "checkpoint_last.pth.tar")
+            ):
+                args.resume = os.path.join(args.work_folder, "checkpoint_last.pth.tar")
             else:
-                gpp = os.path.join(args.work_folder, 'checkpoint_*.pth.tar')
-                print(f'looking for latest checkpoint using: {gpp}')
+                gpp = os.path.join(args.work_folder, "checkpoint_*.pth.tar")
+                print(f"looking for latest checkpoint using: {gpp}")
                 cpts = glob.glob(gpp)
-                cpts_ix = [int(x.split('/')[-1].split('_')[1].split('.')[0]) for x in cpts]
+                cpts_ix = [
+                    int(x.split("/")[-1].split("_")[1].split(".")[0]) for x in cpts
+                ]
                 if len(cpts_ix) > 0:
                     mx_ix = np.argmax(cpts_ix)
                     args.resume = cpts[mx_ix]
                 else:
-                    print('=> no checkpoints found')
+                    print("=> no checkpoints found")
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             if args.gpu is None:
                 checkpoint = torch.load(args.resume)
             else:
                 # Map model to be loaded to specified single gpu.
-                loc = 'cuda:{}'.format(args.gpu)
+                loc = "cuda:{}".format(args.gpu)
                 checkpoint = torch.load(args.resume, map_location=loc)
-            args.start_epoch = checkpoint['epoch']
+            args.start_epoch = checkpoint["epoch"]
             if args.debug:
-                sd = {k.replace('module.', ''): v for k, v in checkpoint['state_dict'].items()}
+                sd = {
+                    k.replace("module.", ""): v
+                    for k, v in checkpoint["state_dict"].items()
+                }
             else:
-                sd = checkpoint['state_dict']
+                sd = checkpoint["state_dict"]
             missing_keys, unexpected_keys = model.load_state_dict(sd, strict=False)
             if (len(missing_keys) > 0) or (len(unexpected_keys) > 0):
-                print(f'=> missing_keys={missing_keys}, unexpected_keys={unexpected_keys}')
-            optimizer.load_state_dict(checkpoint['optimizer'])
+                print(
+                    f"=> missing_keys={missing_keys}, unexpected_keys={unexpected_keys}"
+                )
+            optimizer.load_state_dict(checkpoint["optimizer"])
             if args.ddisc:
-                ddisc_sd = checkpoint['ddisc_state_dict']
+                ddisc_sd = checkpoint["ddisc_state_dict"]
                 ddisc.load_state_dict(ddisc_sd)
-                optimizer_ddisc.load_state_dict(checkpoint['ddisc_optimizer'])
+                optimizer_ddisc.load_state_dict(checkpoint["ddisc_optimizer"])
             if args.train_hed:
-                enet_sd = checkpoint['enet_state_dict']
+                enet_sd = checkpoint["enet_state_dict"]
 
                 for ei in range(len(enet)):
                     enet[ei].load_state_dict(enet_sd[ei])
-                    optimizer_enet[ei].load_state_dict(checkpoint['enet_optimizer'][ei])
+                    optimizer_enet[ei].load_state_dict(checkpoint["enet_optimizer"][ei])
 
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
+            print(
+                "=> loaded checkpoint '{}' (epoch {})".format(
+                    args.resume, checkpoint["epoch"]
+                )
+            )
 
     cudnn.benchmark = True
 
     # Data loading code
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+    )
     if args.aug_plus:
         # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
         augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-            ], p=0.8),
+            transforms.RandomResizedCrop(224, scale=(0.2, 1.0)),
+            transforms.RandomApply(
+                [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8  # not strengthened
+            ),
             transforms.RandomGrayscale(p=0.2),
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+            transforms.RandomApply([moco.loader.GaussianBlur([0.1, 2.0])], p=0.5),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            normalize
+            normalize,
         ]
     else:
         # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
         augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+            transforms.RandomResizedCrop(224, scale=(0.2, 1.0)),
             transforms.RandomGrayscale(p=0.2),
             transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            normalize
+            normalize,
         ]
 
-    if args.edges_type == 'hed':
-        if args.train_hed and 'canny' in args.hed_loss_type:
+    if args.edges_type == "hed":
+        if args.train_hed and "canny" in args.hed_loss_type:
             augmentation = (
                 augmentation.copy(),  # for queries
                 augmentation[:-1],  # for keys #removed normalization
-                [moco.loader.ToEdges2D(sigma=args.edges_sigma, dil=args.edges_dil),
-                 transforms.GaussianBlur(args.canny_blur_rad, 0.15), moco.loader.StretchValues()]
+                [
+                    moco.loader.ToEdges2D(sigma=args.edges_sigma, dil=args.edges_dil),
+                    transforms.GaussianBlur(args.canny_blur_rad, 0.15),
+                    moco.loader.StretchValues(),
+                ],
             )
         else:
             augmentation = (
                 augmentation.copy(),  # for queries
-                augmentation[:-1]  # for keys #removed normalization
+                augmentation[:-1],  # for keys #removed normalization
             )
-    elif args.edges_type == 'canny':
+    elif args.edges_type == "canny":
         canny_map = moco.loader.ToEdges(sigma=args.edges_sigma, dil=args.edges_dil)
         augmentation = (
             # for queries
             augmentation.copy(),
             # for keys
-            augmentation[:-1] + [canny_map, transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.229, 0.224, 0.225])]
+            augmentation[:-1]
+            + [
+                canny_map,
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.229, 0.224, 0.225]),
+            ],
         )
     else:
         raise NotImplementedError()
-    if args.train_hed and 'canny' in args.hed_loss_type:
-        transform = moco.loader.TwoCropsTransformPlusCanny((transforms.Compose(augmentation[0]),
-                                                            transforms.Compose(augmentation[1]),
-                                                            transforms.Compose(augmentation[2])), args)
+    if args.train_hed and "canny" in args.hed_loss_type:
+        transform = moco.loader.TwoCropsTransformPlusCanny(
+            (
+                transforms.Compose(augmentation[0]),
+                transforms.Compose(augmentation[1]),
+                transforms.Compose(augmentation[2]),
+            ),
+            args,
+        )
     else:
         transform = moco.loader.TwoCropsTransform(
             (transforms.Compose(augmentation[0]), transforms.Compose(augmentation[1])),
-            args)
+            args,
+        )
 
     train_loaders = []
     train_samplers = []
-    datas = args.data.split(',')
-    assert args.batch_size % len(datas) == 0, f'for simplicity, please make sure args.batch_size={args.batch_size} ' \
-                                              f'is divisible by len(datasets)={len(datas)}'
+    datas = args.data.split(",")
+    assert args.batch_size % len(datas) == 0, (
+        f"for simplicity, please make sure args.batch_size={args.batch_size} "
+        f"is divisible by len(datasets)={len(datas)}"
+    )
     for iData, data in enumerate(datas):
         if os.path.isdir(data):
-            print(f'=> Loading a custom dataset: {data}')
+            print(f"=> Loading a custom dataset: {data}")
             train_dataset = datasets.ImageFolder(data, transform)
-            print(f'=> loaded {len(train_dataset)} images')
+            print(f"=> loaded {len(train_dataset)} images")
         else:
-            train_dataset = domainnet.Dataset(data, root=os.path.dirname(data), transform=transform, filter_files=[])
+            train_dataset = domainnet.Dataset(
+                data, root=os.path.dirname(data), transform=transform, filter_files=[]
+            )
 
         # we wrap this to get the indices and paths for the batch out
         train_dataset = IndexedDataset(train_dataset, args)
@@ -274,18 +346,25 @@ def main_worker(gpu, args):
         train_samplers.append(train_sampler)
 
         train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=int(args.batch_size / len(datas)), shuffle=(train_sampler is None),
-            num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+            train_dataset,
+            batch_size=int(args.batch_size / len(datas)),
+            shuffle=(train_sampler is None),
+            num_workers=args.workers,
+            pin_memory=True,
+            sampler=train_sampler,
+            drop_last=True,
+        )
 
         train_loaders.append(train_loader)
-
 
     if len(train_loaders) > 1:
         train_loader = DataCoLoader(train_loaders, args)
     else:
         train_loader = train_loaders[0]
 
-    print(f'=> Starting training from epoch {args.start_epoch}, will train for {args.epochs} epochs')
+    print(
+        f"=> Starting training from epoch {args.start_epoch}, will train for {args.epochs} epochs"
+    )
 
     for epoch in range(args.start_epoch, args.epochs):
         for train_sampler in train_samplers:
@@ -297,57 +376,94 @@ def main_worker(gpu, args):
             for ei in range(len(enet)):
                 adjust_learning_rate(optimizer_enet[ei], epoch, args)
         # train for one epoch
-        print(f'=> Start training epoch #{epoch}')
-        train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, optimizer_ddisc, optimizer_enet,
-              l1_criterion, l2_criterion, epoch, args)
-        print(f'=> Finished training epoch #{epoch}')
+        print(f"=> Start training epoch #{epoch}")
+        train(
+            train_loader,
+            model,
+            ddisc,
+            enet,
+            enet_orig,
+            criterion,
+            optimizer,
+            optimizer_ddisc,
+            optimizer_enet,
+            l1_criterion,
+            l2_criterion,
+            epoch,
+            args,
+        )
+        print(f"=> Finished training epoch #{epoch}")
         checkpoint_freq = args.save_n_epochs
         if args.is_root:
             save_dict = {
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'ddisc_state_dict': ddisc.state_dict() if args.ddisc else {},
-                'optimizer': optimizer.state_dict(),
-                'enet_state_dict': [],
-                'enet_optimizer': [],
-                'ddisc_optimizer': optimizer_ddisc.state_dict() if args.ddisc else {},
+                "epoch": epoch + 1,
+                "arch": args.arch,
+                "state_dict": model.state_dict(),
+                "ddisc_state_dict": ddisc.state_dict() if args.ddisc else {},
+                "optimizer": optimizer.state_dict(),
+                "enet_state_dict": [],
+                "enet_optimizer": [],
+                "ddisc_optimizer": optimizer_ddisc.state_dict() if args.ddisc else {},
             }
 
             for ei in range(len(enet)):
-                save_dict['enet_state_dict'].append(enet[ei].state_dict())
-                save_dict['enet_optimizer'].append(optimizer_enet[ei].state_dict())
-            save_checkpoint(save_dict, is_best=False, filename=os.path.join(args.work_folder,
-                                                                            'checkpoint_last.pth.tar'))
-            if (epoch+1) % checkpoint_freq == 0:
-                src = os.path.join(args.work_folder, 'checkpoint_last.pth.tar')
-                dst = os.path.join(args.work_folder, 'checkpoint_{:04d}.pth.tar'.format(epoch))
+                save_dict["enet_state_dict"].append(enet[ei].state_dict())
+                save_dict["enet_optimizer"].append(optimizer_enet[ei].state_dict())
+            save_checkpoint(
+                save_dict,
+                is_best=False,
+                filename=os.path.join(args.work_folder, "checkpoint_last.pth.tar"),
+            )
+            if (epoch + 1) % checkpoint_freq == 0:
+                src = os.path.join(args.work_folder, "checkpoint_last.pth.tar")
+                dst = os.path.join(
+                    args.work_folder, "checkpoint_{:04d}.pth.tar".format(epoch)
+                )
                 shutil.copy(src, dst)
 
 
-def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, optimizer_ddisc, optimizer_enet,
-          l1_criterion, hed_criterion, epoch, args):
+def train(
+    train_loader,
+    model,
+    ddisc,
+    enet,
+    enet_orig,
+    criterion,
+    optimizer,
+    optimizer_ddisc,
+    optimizer_enet,
+    l1_criterion,
+    hed_criterion,
+    epoch,
+    args,
+):
 
-    batch_time = AverageMeter('Time', ':6.5f')
-    data_time = AverageMeter('Data', ':6.5f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    batch_time = AverageMeter("Time", ":6.5f")
+    data_time = AverageMeter("Data", ":6.5f")
+    losses = AverageMeter("Loss", ":.4e")
+    top1 = AverageMeter("Acc@1", ":6.2f")
+    top5 = AverageMeter("Acc@5", ":6.2f")
     # When using trainable hed:
-    losses_hed_meter = AverageMeter('Hed Loss', ':.4e')
+    losses_hed_meter = AverageMeter("Hed Loss", ":.4e")
     # When using trainable domain discriminator:
-    losses_ddisc = AverageMeter('DDisc Loss', ':.4e')
-    losses_ddisc_main_obj = AverageMeter('Obj. DDisc Loss', ':.4e')
-    top1_ddisc_single = AverageMeter(f'DDisc Acc@image (t={args.ddisc_acc_enabler})', ':6.2f') # TODO: merge with ddisc_grid?
-    top1_ddisc_grid = AverageMeter(f'DDisc Acc@grid '
-                                   f'(t={args.ddisc_acc_enabler})', ':6.2f')
+    losses_ddisc = AverageMeter("DDisc Loss", ":.4e")
+    losses_ddisc_main_obj = AverageMeter("Obj. DDisc Loss", ":.4e")
+    top1_ddisc_single = AverageMeter(
+        f"DDisc Acc@image (t={args.ddisc_acc_enabler})", ":6.2f"
+    )  # TODO: merge with ddisc_grid?
+    top1_ddisc_grid = AverageMeter(
+        f"DDisc Acc@grid " f"(t={args.ddisc_acc_enabler})", ":6.2f"
+    )
     meters = [batch_time, data_time, losses, top1, top5]
     if args.ddisc:
-        meters.extend([losses_ddisc, losses_ddisc_main_obj, top1_ddisc_single, top1_ddisc_grid])
+        meters.extend(
+            [losses_ddisc, losses_ddisc_main_obj, top1_ddisc_single, top1_ddisc_grid]
+        )
     if args.train_hed:
         meters.append(losses_hed_meter)
     progress = ProgressMeter(
-        len(train_loader), meters, prefix="Epoch: [{}]".format(epoch))
+        len(train_loader), meters, prefix="Epoch: [{}]".format(epoch)
+    )
 
     # switch to train mode
     model.train()
@@ -358,13 +474,13 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
         for ei in range(len(enet)):
             enet[ei].train()
 
-        if args.hed_loss_type == 'l2_hed':
+        if args.hed_loss_type == "l2_hed":
             enet_orig.train()
 
     device = next(model.parameters()).device
 
     end = time.time()
-    print(f'=> Entering train loop')
+    print(f"=> Entering train loop")
 
     for i, batch in enumerate(train_loader):
         images = None
@@ -400,35 +516,47 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         if args.train_hed:
-            if 'canny' in args.hed_loss_type:
+            if "canny" in args.hed_loss_type:
                 orig_hed_q = images[4].squeeze(dim=1).cuda(args.gpu, non_blocking=True)
 
-            elif args.hed_loss_type == 'l2_hed':
+            elif args.hed_loss_type == "l2_hed":
 
                 # copmute original Hed results
-                orig_hed_q_out, _ = enet_orig(im_q=images[0], im_k=images[1], isedge_q=isedge_q, isedge_k=isedge_k)
+                orig_hed_q_out, _ = enet_orig(
+                    im_q=images[0], im_k=images[1], isedge_q=isedge_q, isedge_k=isedge_k
+                )
                 orig_hed_q_out = orig_hed_q_out.detach()
                 orig_hed_q = enet_orig.denormalize(orig_hed_q_out, isedge_q_s)
             else:
                 raise NotImplementedError()
 
         # compute output
-        if args.edges_type == 'hed':
-            num_domains = int(domain_label[-1]+1)
-            n_per_domain = int(len(domain_label)/num_domains)
+        if args.edges_type == "hed":
+            num_domains = int(domain_label[-1] + 1)
+            n_per_domain = int(len(domain_label) / num_domains)
             im_q = images[0]
             im_k = images[1]
             for n in range(num_domains):
-                strt, stp = n*n_per_domain, (n+1)*n_per_domain
-                im_q[strt:stp], im_k[strt:stp] = enet[n](im_q=im_q[strt:stp], im_k=im_k[strt:stp],
-                                                         isedge_q=isedge_q[strt:stp],
-                                                         isedge_k=isedge_k[strt:stp])
+                strt, stp = n * n_per_domain, (n + 1) * n_per_domain
+                im_q[strt:stp], im_k[strt:stp] = enet[n](
+                    im_q=im_q[strt:stp],
+                    im_k=im_k[strt:stp],
+                    isedge_q=isedge_q[strt:stp],
+                    isedge_k=isedge_k[strt:stp],
+                )
 
         else:
             im_q = images[0]
             im_k = images[1]
-        output, target, extra_outputs = model(im_q=im_q, im_k=im_k, isedge_q=isedge_q, isedge_k=isedge_k,
-                                              q_selector=domain_label, sample_idx=domain_index, sample_pth=img_src)
+        output, target, extra_outputs = model(
+            im_q=im_q,
+            im_k=im_k,
+            isedge_q=isedge_q,
+            isedge_k=isedge_k,
+            q_selector=domain_label,
+            sample_idx=domain_index,
+            sample_pth=img_src,
+        )
         loss = criterion(output, target)
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
@@ -452,7 +580,7 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
             loss_ddisc = 0
             loss_ddisc_main_obj = 0
             # Run domain discriminator on pooled features
-            q = extra_outputs['q']  # n, c
+            q = extra_outputs["q"]  # n, c
             if not args.ddisc_images:
                 q = q[ixv]
             ddisc_logits = ddisc(q)
@@ -476,7 +604,7 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
                 loss_ddisc_main_obj = loss_ddisc_main_obj + crit_val
             loss_ddisc = loss_ddisc + crit_val_d
             # Run domain discriminator on pre-pooled features
-            q_fm = extra_outputs['q_fm']  # n, c, y, x
+            q_fm = extra_outputs["q_fm"]  # n, c, y, x
             if not args.ddisc_images:
                 q_fm = q_fm[ixv]
             n, c, y, x = q_fm.shape
@@ -506,10 +634,18 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
             loss_ddisc = loss_ddisc + crit_val_d
 
             # update averages
-            losses_ddisc.update(loss_ddisc.item() if isinstance(loss_ddisc, torch.Tensor)
-                                else loss_ddisc, images[0].size(0))
-            losses_ddisc_main_obj.update(loss_ddisc_main_obj.item() if isinstance(loss_ddisc_main_obj, torch.Tensor)
-                                         else loss_ddisc_main_obj, images[0].size(0))
+            losses_ddisc.update(
+                loss_ddisc.item()
+                if isinstance(loss_ddisc, torch.Tensor)
+                else loss_ddisc,
+                images[0].size(0),
+            )
+            losses_ddisc_main_obj.update(
+                loss_ddisc_main_obj.item()
+                if isinstance(loss_ddisc_main_obj, torch.Tensor)
+                else loss_ddisc_main_obj,
+                images[0].size(0),
+            )
 
             # add the negative loss to the main objective
             loss = loss - loss_ddisc_main_obj
@@ -520,12 +656,14 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
 
         if args.train_hed:
             # compute train Hed loss
-            if args.hed_loss_type == 'l2_hed':
-                hed_loss = hed_criterion(enet[0].module.denormalize(im_q, isedge_q_s), orig_hed_q)
-            elif args.hed_loss_type == 'l1_canny':
+            if args.hed_loss_type == "l2_hed":
+                hed_loss = hed_criterion(
+                    enet[0].module.denormalize(im_q, isedge_q_s), orig_hed_q
+                )
+            elif args.hed_loss_type == "l1_canny":
                 curr_edges = enet[0].module.denormalize(im_q, isedge_q_s)
                 hed_loss = l1_criterion(curr_edges, orig_hed_q)
-            elif args.hed_loss_type == 'l2_canny':
+            elif args.hed_loss_type == "l2_canny":
                 curr_edges = enet[0].module.denormalize(im_q, isedge_q_s)
                 hed_loss = hed_criterion(curr_edges, orig_hed_q)
             else:
@@ -539,13 +677,15 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
         # gradients yet another time
         optimizer.zero_grad()
         if args.ddisc:
-            ddisc.params_lock() if not isinstance(ddisc, torch.nn.parallel.DistributedDataParallel) \
-                else ddisc.module.params_lock()
+            ddisc.params_lock() if not isinstance(
+                ddisc, torch.nn.parallel.DistributedDataParallel
+            ) else ddisc.module.params_lock()
         loss.backward()
 
         if args.ddisc:
-            ddisc.params_unlock() if not isinstance(ddisc, torch.nn.parallel.DistributedDataParallel) \
-                else ddisc.module.params_unlock()
+            ddisc.params_unlock() if not isinstance(
+                ddisc, torch.nn.parallel.DistributedDataParallel
+            ) else ddisc.module.params_unlock()
         optimizer.step()
 
         # now we can update the domain discriminator
@@ -563,15 +703,16 @@ def train(train_loader, model, ddisc, enet, enet_orig, criterion, optimizer, opt
             progress.display(i)
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename="checkpoint.pth.tar"):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, "model_best.pth.tar")
 
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
-    def __init__(self, name, fmt=':f'):
+
+    def __init__(self, name, fmt=":f"):
         self.name = name
         self.fmt = fmt
         self.val = self.avg = self.sum = self.count = 0
@@ -589,7 +730,7 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
     def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        fmtstr = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
         return fmtstr.format(**self.__dict__)
 
 
@@ -602,25 +743,25 @@ class ProgressMeter(object):
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
-        print('\t'.join(entries))
+        print("\t".join(entries))
 
     @staticmethod
     def _get_batch_fmtstr(num_batches):
         num_digits = len(str(num_batches // 1))
-        fmt = '{:' + str(num_digits) + 'd}'
-        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
+        fmt = "{:" + str(num_digits) + "d}"
+        return "[" + fmt + "/" + fmt.format(num_batches) + "]"
 
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Decay the learning rate based on schedule"""
     lr = args.lr
     if args.cos:  # cosine lr schedule
-        lr *= 0.5 * (1. + math.cos(math.pi * epoch / args.epochs))
+        lr *= 0.5 * (1.0 + math.cos(math.pi * epoch / args.epochs))
     else:  # stepwise lr schedule
         for milestone in args.schedule:
-            lr *= 0.1 if epoch >= milestone else 1.
+            lr *= 0.1 if epoch >= milestone else 1.0
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        param_group["lr"] = lr
 
 
 def accuracy(output, target, topk=(1,)):
@@ -644,6 +785,6 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 
     main()
